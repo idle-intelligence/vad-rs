@@ -332,8 +332,12 @@ pub struct VadDetector {
     last_sample: f32,
     positive_threshold: f32,
     negative_threshold: f32,
+    /// Number of consecutive above-threshold frames required to fire SpeechStart
+    start_frames: usize,
+    /// Counter of consecutive frames above positive threshold
+    above_count: usize,
     /// Number of consecutive below-threshold frames required to fire SpeechEnd
-    redemption_frames: usize,
+    end_frames: usize,
     /// Counter of consecutive frames below negative threshold
     below_count: usize,
 }
@@ -348,7 +352,9 @@ impl VadDetector {
             last_sample: 0.0,
             positive_threshold: 0.5,
             negative_threshold: 0.35,
-            redemption_frames: 8,
+            start_frames: 3,
+            above_count: 0,
+            end_frames: 8,
             below_count: 0,
         }
     }
@@ -358,8 +364,12 @@ impl VadDetector {
         self.negative_threshold = negative;
     }
 
-    pub fn set_redemption_frames(&mut self, n: usize) {
-        self.redemption_frames = n;
+    pub fn set_start_frames(&mut self, n: usize) {
+        self.start_frames = n;
+    }
+
+    pub fn set_end_frames(&mut self, n: usize) {
+        self.end_frames = n;
     }
 
     /// Feed 24kHz samples; returns any VAD events detected.
@@ -381,17 +391,24 @@ impl VadDetector {
                 Ok(prob) => match self.state {
                     VadState::Idle => {
                         if prob >= self.positive_threshold {
-                            self.state = VadState::Speaking;
-                            self.below_count = 0;
-                            events.push(VadEvent::SpeechStart);
+                            self.above_count += 1;
+                            if self.above_count >= self.start_frames {
+                                self.state = VadState::Speaking;
+                                self.above_count = 0;
+                                self.below_count = 0;
+                                events.push(VadEvent::SpeechStart);
+                            }
+                        } else {
+                            self.above_count = 0;
                         }
                     }
                     VadState::Speaking => {
                         if prob < self.negative_threshold {
                             self.below_count += 1;
-                            if self.below_count >= self.redemption_frames {
+                            if self.below_count >= self.end_frames {
                                 self.state = VadState::Idle;
                                 self.below_count = 0;
+                                self.above_count = 0;
                                 events.push(VadEvent::SpeechEnd);
                             }
                         } else if prob >= self.positive_threshold {
@@ -413,6 +430,7 @@ impl VadDetector {
         self.resample_buf.clear();
         self.resample_pos = 0.0;
         self.last_sample = 0.0;
+        self.above_count = 0;
         self.below_count = 0;
     }
 }
