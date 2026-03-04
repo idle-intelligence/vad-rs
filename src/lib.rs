@@ -330,6 +330,12 @@ pub struct VadDetector {
     resample_pos: f64,
     /// Last 24kHz sample seen (for interpolation across chunks)
     last_sample: f32,
+    positive_threshold: f32,
+    negative_threshold: f32,
+    /// Number of consecutive below-threshold frames required to fire SpeechEnd
+    redemption_frames: usize,
+    /// Counter of consecutive frames below negative threshold
+    below_count: usize,
 }
 
 impl VadDetector {
@@ -340,7 +346,20 @@ impl VadDetector {
             resample_buf: Vec::new(),
             resample_pos: 0.0,
             last_sample: 0.0,
+            positive_threshold: 0.5,
+            negative_threshold: 0.35,
+            redemption_frames: 8,
+            below_count: 0,
         }
+    }
+
+    pub fn set_thresholds(&mut self, positive: f32, negative: f32) {
+        self.positive_threshold = positive;
+        self.negative_threshold = negative;
+    }
+
+    pub fn set_redemption_frames(&mut self, n: usize) {
+        self.redemption_frames = n;
     }
 
     /// Feed 24kHz samples; returns any VAD events detected.
@@ -361,15 +380,22 @@ impl VadDetector {
             match self.vad.process_chunk(&chunk) {
                 Ok(prob) => match self.state {
                     VadState::Idle => {
-                        if prob >= 0.5 {
+                        if prob >= self.positive_threshold {
                             self.state = VadState::Speaking;
+                            self.below_count = 0;
                             events.push(VadEvent::SpeechStart);
                         }
                     }
                     VadState::Speaking => {
-                        if prob < 0.35 {
-                            self.state = VadState::Idle;
-                            events.push(VadEvent::SpeechEnd);
+                        if prob < self.negative_threshold {
+                            self.below_count += 1;
+                            if self.below_count >= self.redemption_frames {
+                                self.state = VadState::Idle;
+                                self.below_count = 0;
+                                events.push(VadEvent::SpeechEnd);
+                            }
+                        } else if prob >= self.positive_threshold {
+                            self.below_count = 0;
                         }
                     }
                 },
@@ -387,6 +413,7 @@ impl VadDetector {
         self.resample_buf.clear();
         self.resample_pos = 0.0;
         self.last_sample = 0.0;
+        self.below_count = 0;
     }
 }
 
@@ -443,9 +470,9 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "requires local model file"]
+    #[cfg_attr(not(feature = "local-tests"), ignore = "requires local model file")]
     fn test_silence_probability() {
-        let path = "/Users/tc/Code/idle-intelligence/hf/silero-vad-v5.safetensors";
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/test-data/silero-vad-v5.safetensors");
         let data = std::fs::read(path).expect("Failed to read model file");
         let mut vad = SileroVad::from_bytes(&data).expect("Failed to load model");
 
@@ -457,10 +484,10 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires local model + WAV file"]
+    #[cfg_attr(not(feature = "local-tests"), ignore = "requires local model + WAV file")]
     fn test_speech_detection() {
-        let model_path = "/Users/tc/Code/idle-intelligence/hf/silero-vad-v5.safetensors";
-        let wav_path = "/Users/tc/Code/idle-intelligence/stt-web-vad/web/test-bria.wav";
+        let model_path = concat!(env!("CARGO_MANIFEST_DIR"), "/test-data/silero-vad-v5.safetensors");
+        let wav_path = concat!(env!("CARGO_MANIFEST_DIR"), "/test-data/speech-24khz.wav");
 
         let data = std::fs::read(model_path).expect("Failed to read model file");
         let mut vad = SileroVad::from_bytes(&data).expect("Failed to load model");
@@ -495,11 +522,11 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires local model file"]
+    #[cfg_attr(not(feature = "local-tests"), ignore = "requires local model file")]
     fn test_forward_pass_trace() {
         // Trace intermediate tensor values through the forward pass
         // to identify which layer produces unexpected values.
-        let model_path = "/Users/tc/Code/idle-intelligence/hf/silero-vad-v5.safetensors";
+        let model_path = concat!(env!("CARGO_MANIFEST_DIR"), "/test-data/silero-vad-v5.safetensors");
         let data = std::fs::read(model_path).expect("Failed to read model file");
         let vad = SileroVad::from_bytes(&data).expect("Failed to load model");
 
@@ -638,9 +665,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires local model file"]
+    #[cfg_attr(not(feature = "local-tests"), ignore = "requires local model file")]
     fn test_noise_probability() {
-        let path = "/Users/tc/Code/idle-intelligence/hf/silero-vad-v5.safetensors";
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/test-data/silero-vad-v5.safetensors");
         let data = std::fs::read(path).expect("Failed to read model file");
         let mut vad = SileroVad::from_bytes(&data).expect("Failed to load model");
 
@@ -670,9 +697,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires local model file"]
+    #[cfg_attr(not(feature = "local-tests"), ignore = "requires local model file")]
     fn test_vad_detector_24khz() {
-        let path = "/Users/tc/Code/idle-intelligence/hf/silero-vad-v5.safetensors";
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/test-data/silero-vad-v5.safetensors");
         let data = std::fs::read(path).expect("Failed to read model file");
         let vad = SileroVad::from_bytes(&data).expect("Failed to load model");
         let mut detector = VadDetector::new(vad);
@@ -699,12 +726,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires local model + WAV file"]
+    #[cfg_attr(not(feature = "local-tests"), ignore = "requires local model + WAV file")]
     fn test_e2e_silence_speech_silence_speech() {
         // End-to-end test: splice real speech with silence gaps
         // Pattern: 1s silence → 2s speech → 1.5s silence → 2s speech
-        let model_path = "/Users/tc/Code/idle-intelligence/hf/silero-vad-v5.safetensors";
-        let wav_path = "/Users/tc/Code/idle-intelligence/stt-web-vad/web/test-bria.wav";
+        let model_path = concat!(env!("CARGO_MANIFEST_DIR"), "/test-data/silero-vad-v5.safetensors");
+        let wav_path = concat!(env!("CARGO_MANIFEST_DIR"), "/test-data/speech-24khz.wav");
 
         let data = std::fs::read(model_path).expect("Failed to read model file");
         let vad = SileroVad::from_bytes(&data).expect("Failed to load model");
@@ -782,12 +809,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires local model + WAV file"]
+    #[cfg_attr(not(feature = "local-tests"), ignore = "requires local model + WAV file")]
     fn test_e2e_real_audio_vad_timestamps() {
         // End-to-end test with real speech audio (test-bria.wav, 24kHz)
         // through VadDetector at 24kHz — the full pipeline including resampling
-        let model_path = "/Users/tc/Code/idle-intelligence/hf/silero-vad-v5.safetensors";
-        let wav_path = "/Users/tc/Code/idle-intelligence/stt-web-vad/web/test-bria.wav";
+        let model_path = concat!(env!("CARGO_MANIFEST_DIR"), "/test-data/silero-vad-v5.safetensors");
+        let wav_path = concat!(env!("CARGO_MANIFEST_DIR"), "/test-data/speech-24khz.wav");
 
         let data = std::fs::read(model_path).expect("Failed to read model file");
         let vad = SileroVad::from_bytes(&data).expect("Failed to load model");
