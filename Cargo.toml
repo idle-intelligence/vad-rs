@@ -1,0 +1,10 @@
+[package]
+name = "vad-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+candle-core = "0.9"
+candle-nn = "0.9"
+safetensors = "0.4"
+anyhow = "1.0"
