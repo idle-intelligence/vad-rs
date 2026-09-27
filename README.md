@@ -1,6 +1,6 @@
 # vad-rs
 
-Silero VAD v5 inference in Rust, using [candle](https://github.com/huggingface/candle) for CPU tensor ops.
+Rust reimplementation of [Silero VAD](https://github.com/snakers4/silero-vad) v5 inference, using [candle](https://github.com/huggingface/candle) for CPU tensor ops.
 
 Accepts 24kHz PCM audio and emits `SpeechStart` / `SpeechEnd` events with configurable thresholds and hysteresis (redemption frames).
 
@@ -69,4 +69,4 @@ cargo test
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE). Reimplements [Silero VAD](https://github.com/snakers4/silero-vad), also MIT.
