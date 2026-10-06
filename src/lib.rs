@@ -58,7 +58,9 @@ impl SileroVad {
             let shape: Vec<usize> = view.shape().to_vec();
             let raw = view.data();
             let floats: Vec<f32> = raw
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
                 .collect();
             Tensor::from_vec(floats, shape.as_slice(), &device)
@@ -208,9 +210,8 @@ fn reflection_pad1d(x: &Tensor, pad: usize) -> Result<Tensor> {
     let new_l = l + 2 * pad;
     let mut padded = vec![0.0f32; b * c * new_l];
 
-    for bi in 0..b {
-        for ci in 0..c {
-            let src = &x_vec[bi][ci];
+    for (bi, b_vec) in x_vec.iter().enumerate().take(b) {
+        for (ci, src) in b_vec.iter().enumerate().take(c) {
             let base = (bi * c + ci) * new_l;
 
             // Left reflection: mirror indices [pad, pad-1, ..., 1]
@@ -218,9 +219,7 @@ fn reflection_pad1d(x: &Tensor, pad: usize) -> Result<Tensor> {
                 padded[base + i] = src[pad - i];
             }
             // Copy original signal
-            for i in 0..l {
-                padded[base + pad + i] = src[i];
-            }
+            padded[base + pad..base + pad + l].copy_from_slice(&src[..l]);
             // Right reflection: mirror indices [l-2, l-3, ..., l-1-pad]
             for i in 0..pad {
                 padded[base + pad + l + i] = src[l - 2 - i];
@@ -240,15 +239,12 @@ fn reflection_pad1d_right(x: &Tensor, pad: usize) -> Result<Tensor> {
     let new_l = l + pad;
     let mut padded = vec![0.0f32; b * c * new_l];
 
-    for bi in 0..b {
-        for ci in 0..c {
-            let src = &x_vec[bi][ci];
+    for (bi, b_vec) in x_vec.iter().enumerate().take(b) {
+        for (ci, src) in b_vec.iter().enumerate().take(c) {
             let base = (bi * c + ci) * new_l;
 
             // Copy original signal
-            for i in 0..l {
-                padded[base + i] = src[i];
-            }
+            padded[base..base + l].copy_from_slice(&src[..l]);
             // Right reflection: mirror indices [l-2, l-3, ..., l-1-pad]
             for i in 0..pad {
                 padded[base + l + i] = src[l - 2 - i];
@@ -387,8 +383,8 @@ impl VadDetector {
 
         while self.resample_buf.len() >= 512 {
             let chunk: Vec<f32> = self.resample_buf.drain(..512).collect();
-            match self.vad.process_chunk(&chunk) {
-                Ok(prob) => match self.state {
+            if let Ok(prob) = self.vad.process_chunk(&chunk) {
+                match self.state {
                     VadState::Idle => {
                         if prob >= self.positive_threshold {
                             self.above_count += 1;
@@ -415,8 +411,7 @@ impl VadDetector {
                             self.below_count = 0;
                         }
                     }
-                },
-                Err(_) => {}
+                }
             }
         }
 
@@ -513,7 +508,9 @@ mod tests {
         // Read 24kHz 16-bit PCM WAV manually (skip 44-byte header)
         let wav_bytes = std::fs::read(wav_path).expect("Failed to read WAV file");
         let samples_24k: Vec<f32> = wav_bytes[44..]
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
             .collect();
 
@@ -526,7 +523,7 @@ mod tests {
         // Feed 512-sample chunks directly to SileroVad and print probabilities
         let mut max_prob: f32 = 0.0;
         let mut chunk_count = 0;
-        for chunk in resampled.chunks_exact(512) {
+        for chunk in resampled.as_chunks::<512>().0 {
             let prob = vad.process_chunk(chunk).expect("process_chunk failed");
             if chunk_count < 20 || chunk_count % 50 == 0 || prob > 0.1 {
                 let time_s = chunk_count as f64 * 512.0 / 16000.0;
@@ -758,7 +755,9 @@ mod tests {
         // Read real speech from WAV
         let wav_bytes = std::fs::read(wav_path).expect("Failed to read WAV file");
         let all_speech: Vec<f32> = wav_bytes[44..]
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
             .collect();
 
@@ -810,14 +809,14 @@ mod tests {
         println!("Speech ends:   {ends:?}");
 
         assert!(starts.len() >= 2, "Expected at least 2 SpeechStart events, got {}", starts.len());
-        assert!(ends.len() >= 1, "Expected at least 1 SpeechEnd event, got {}", ends.len());
+        assert!(!ends.is_empty(), "Expected at least 1 SpeechEnd event, got {}", ends.len());
 
         // First speech start should be near 1.0s
         assert!(starts[0] >= 0.8 && starts[0] <= 1.5,
             "First SpeechStart at {:.3}s, expected near 1.0s", starts[0]);
 
         // There should be a gap (SpeechEnd) somewhere around 3.0-4.5s
-        let mid_end = ends.iter().find(|&&t| t >= 2.5 && t <= 5.0);
+        let mid_end = ends.iter().find(|&&t| (2.5..=5.0).contains(&t));
         assert!(mid_end.is_some(),
             "Expected a SpeechEnd in the silence gap (2.5-5.0s), got ends: {ends:?}");
 
@@ -841,7 +840,9 @@ mod tests {
         // Read 24kHz 16-bit PCM WAV (skip 44-byte header)
         let wav_bytes = std::fs::read(wav_path).expect("Failed to read WAV file");
         let samples_24k: Vec<f32> = wav_bytes[44..]
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
             .collect();
 
