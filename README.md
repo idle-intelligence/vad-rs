@@ -15,7 +15,7 @@ let mut detector = VadDetector::new(vad);
 
 // Optional: tune sensitivity
 detector.set_thresholds(0.5, 0.35);      // positive, negative
-detector.set_redemption_frames(8);         // frames below threshold before SpeechEnd
+detector.set_end_frames(8);                // frames below threshold before SpeechEnd
 
 // Feed 24kHz audio in any chunk size
 let events = detector.feed_audio(&samples_24khz);
@@ -39,9 +39,10 @@ Low-level: processes exactly 512 samples of 16kHz audio per call, returns speech
 High-level wrapper:
 - Resamples 24kHz → 16kHz (linear interpolation)
 - Windows into 512-sample chunks
-- State machine with configurable thresholds and redemption frames
+- State machine with configurable thresholds and start/end frame counts
 - `set_thresholds(positive, negative)` — speech start/end probability thresholds (defaults: 0.5, 0.35)
-- `set_redemption_frames(n)` — consecutive below-threshold frames required for `SpeechEnd` (default: 8, ~256ms)
+- `set_start_frames(n)` — consecutive above-threshold frames required for `SpeechStart` (default: 3)
+- `set_end_frames(n)` — consecutive below-threshold frames required for `SpeechEnd` (default: 8, ~256ms)
 
 ## Tests
 
